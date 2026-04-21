@@ -160,11 +160,11 @@ class DenseRetriever:
             query, normalize_embeddings=True
         ).tolist()
 
-        results = self.client.search(
+        results = self.client.query_points(
             collection_name=self.collection,
-            query_vector=query_vector,
+            query=query_vector,
             limit=top_k,
-            search_params={"ef": ef_search},
+            search_params={"hnsw_ef": ef_search},
         )
 
         return [
@@ -175,5 +175,5 @@ class DenseRetriever:
                 "url": r.payload["url"],
                 "score": r.score,
             }
-            for r in results
+            for r in results.points
         ]

@@ -77,7 +77,7 @@ def _format_results(results: list[dict]) -> str:
 # Gradio UI
 # ---------------------------------------------------------------------------
 
-with gr.Blocks(title="CodeSearch M0", theme=gr.themes.Monochrome()) as demo:
+with gr.Blocks(title="CodeSearch M0") as demo:
     gr.Markdown(
         """
 # 🔍 CodeSearch — M0 Hello World
@@ -110,4 +110,4 @@ Notice where they agree and where they diverge — that gap is what this project
 
 
 if __name__ == "__main__":
-    demo.launch()
+    demo.launch(theme=gr.themes.Monochrome())
