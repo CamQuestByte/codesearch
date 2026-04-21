@@ -1,8 +1,19 @@
+---
+title: Codesearch
+emoji: 🔍
+colorFrom: purple
+colorTo: purple
+sdk: gradio
+sdk_version: 6.13.0
+app_file: app.py
+pinned: false
+license: mit
+short_description: BM25 vs dense retrieval on CodeSearchNet
+---
+
 # CodeSearch: Semantic Retrieval from Scratch
 
 Learning project: BM25 vs dense vs hybrid retrieval on CodeSearchNet, with rigorous eval.
-
-**Live demo:** _(add HF Spaces URL after M4)_
 
 ## Retrieval Ablation Table
 
