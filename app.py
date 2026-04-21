@@ -13,6 +13,10 @@ To deploy to HF Spaces:
     - Set SMOKE_TEST_SIZE=100 for M0, -1 for full corpus (M4)
 """
 
+import sys
+import os
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "src"))
+
 import gradio as gr
 
 from codesearch.data import load_codesearch
