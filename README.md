@@ -39,7 +39,7 @@ Learning project: BM25 vs dense vs hybrid retrieval on CodeSearchNet, with rigor
 
 | Milestone | Status |
 |-----------|--------|
-| M0 · Hello World | 🔄 in progress |
+| M0 · Hello World | ✅ done |
 | M1 · BM25 Baseline + Eval | ⬜ not started |
 | M2 · Dense Retrieval | ⬜ not started |
 | M3 · Hybrid + Reranking | ⬜ not started |
