@@ -15,13 +15,23 @@ short_description: BM25 vs dense retrieval on CodeSearchNet
 
 Learning project: BM25 vs dense vs hybrid retrieval on CodeSearchNet, with rigorous eval.
 
-## Retrieval Ablation Table
+## Retrieval Results
 
-> Updated after each milestone.
+### Reference numbers (Husain et al., 2019)
 
-| Retriever | Model | MRR@10 | nDCG@10 | Recall@100 | Notes |
-|-----------|-------|--------|---------|------------|-------|
-| BM25 | — | — | — | — | M1 baseline |
+Eval setup: 1+999 random distractors per query (not full corpus). Only MRR is reported. BM25 indexes docstrings — inflated relative to a proper code-search baseline.
+
+| Retriever | MRR | Notes |
+|-----------|-----|-------|
+| BM25 (Elasticsearch) | ~0.68 | docstring index |
+
+### Our progress
+
+Eval setup: full 434k-doc corpus, 1k sampled queries (seed=42), BM25 indexes `func_code_tokens` (docstrings stripped).
+
+| Retriever | Model | MRR@10 | nDCG@10 | Recall@100 | Milestone |
+|-----------|-------|--------|---------|------------|-----------|
+| BM25 | — | 0.2731 | 0.2973 | 0.5070 | M1 ✅ |
 | Dense | MiniLM-L6-v2 | — | — | — | M2 |
 | Hybrid (RRF) | MiniLM + BM25 | — | — | — | M3 |
 | Hybrid + Rerank | + cross-encoder | — | — | — | M3 |

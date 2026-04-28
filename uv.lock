@@ -237,6 +237,18 @@ wheels = [
 ]
 
 [[package]]
+name = "bm25s"
+version = "0.3.4"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/12/fe/7f5d349291b6926b7e6c58e729b53a09d7395c4463f040239469670dff25/bm25s-0.3.4.tar.gz", hash = "sha256:81cb1ec316e44b26c02dcfcf9e929fc48e0a19f7f242e50d9fc03c710892bfb8", size = 77486, upload-time = "2026-04-19T04:44:59.254Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/90/9e/1a31ff2a4fa03cad69b342b70698c2fc6bfa33dbb85813e2b556676c4b42/bm25s-0.3.4-py3-none-any.whl", hash = "sha256:a6079e9b7b49eac9e480c48a282f8a1abb5d8ea322b58515ab2f214f272d3af3", size = 72481, upload-time = "2026-04-19T04:44:57.754Z" },
+]
+
+[[package]]
 name = "brotli"
 version = "1.2.0"
 source = { registry = "https://pypi.org/simple" }
@@ -399,6 +411,7 @@ name = "codesearch"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "bm25s" },
     { name = "datasets" },
     { name = "gradio" },
     { name = "numpy" },
@@ -417,6 +430,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "bm25s", specifier = ">=0.3.4" },
     { name = "datasets", specifier = ">=2.20.0" },
     { name = "gradio", specifier = ">=4.36.0" },
     { name = "numpy", specifier = ">=1.26.0" },
@@ -833,6 +847,7 @@ dependencies = [
     { name = "gradio-client" },
     { name = "typer" },
 ]
+sdist = { url = "https://files.pythonhosted.org/packages/ce/86/c9694b7cfada5780e75769e60dc161a161f4dd7fc91b61db5e3a3338bef9/hf_gradio-0.4.1.tar.gz", hash = "sha256:a017d942618f0d495a58ee4563047fa04bef614c00e0cb789a9a6d0633cffa7b", size = 6560, upload-time = "2026-04-22T14:01:32.334Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/30/2d/afff2ee87e75d8eb85c92bb8cf0e15b05c23c2ebd8fd8dec781d8601ed7f/hf_gradio-0.4.1-py3-none-any.whl", hash = "sha256:76b8cb8be6abe62d74c1ad2d35b42f0629db89aa9e1a8d033cecfe7c856eeab3", size = 4482, upload-time = "2026-04-17T19:53:31.827Z" },
 ]
