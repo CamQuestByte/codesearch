@@ -24,8 +24,9 @@ The owner has deep Lucene/BM25 experience and is ramping up on modern LLM retrie
 - ~400k Python functions as corpus documents
 - ~4k eval queries (natural language descriptions) with ground-truth relevant doc per query
 - One relevant document per query (binary relevance judgments)
-- Document fields used: `func_name` (id), `whole_func_string` (code), `func_documentation_string` (docstring), `func_code_url` (url)
-- BM25 indexes **docstrings**. Dense retrieval embeds **code**. This asymmetry is intentional and instructive.
+- Document fields used: `func_code_url` (id), `whole_func_string` (code), `func_code_tokens` (indexed by BM25), `func_documentation_string` (docstring)
+- BM25 indexes **`func_code_tokens`** (pre-tokenized code, docstrings stripped by the dataset). Indexing docstrings inflates MRR to ~0.96 — verified empirically.
+- Dense retrieval embeds **code**. This asymmetry is intentional and instructive.
 
 Smoke-test mode: `SMOKE_TEST_SIZE=100` in `.env` loads 100 docs for fast iteration (M0).
 Full corpus: `SMOKE_TEST_SIZE=-1`.
@@ -39,7 +40,7 @@ Full corpus: `SMOKE_TEST_SIZE=-1`.
 ```
 Query
   │
-  ├──► BM25 (rank_bm25, indexes docstrings)          ──► top-K BM25 hits
+  ├──► BM25 (bm25s, indexes func_code_tokens)        ──► top-K BM25 hits
   │
   ├──► Dense encoder → query vector → Qdrant HNSW    ──► top-K dense hits
   │
@@ -100,7 +101,7 @@ Secrets (`QDRANT_URL`, `QDRANT_API_KEY`) set in Space settings, not committed to
 |-------|--------|-----------|
 | Python | 3.11+ | |
 | Package manager | `uv` | Speed, lockfile, `uv add` workflow |
-| BM25 | `rank_bm25` | Lightweight, no server |
+| BM25 | `bm25s` | Vectorized sparse BM25, ~200x faster than rank_bm25 on full corpus |
 | Embeddings | `sentence-transformers` | Local, swappable, no API cost |
 | Vector DB | Qdrant Cloud | Free tier, no expiry, sparse+dense support |
 | Reranker | `sentence-transformers CrossEncoder` | Same library, no new dependency |
@@ -128,7 +129,7 @@ codesearch/
         ├── data.py               # CodeSearchNet loader, smoke-test mode
         └── retrievers/
             ├── __init__.py
-            ├── bm25.py           # rank_bm25 wrapper
+            ├── bm25.py           # bm25s wrapper, indexes func_code_tokens
             ├── dense.py          # sentence-transformers + Qdrant
             ├── hybrid.py         # RRF fusion (M3)
             └── reranker.py       # CrossEncoder reranker (M3)
@@ -164,22 +165,22 @@ python -m codesearch.eval.harness --retriever [bm25|dense|hybrid|hybrid_rerank]
 
 ## Milestones
 
-### M0 · Hello World ✅ / 🔄
+### M0 · Hello World ✅
 **Scope:** Touch every layer. No metrics. 100 docs only.
 **Done when:** Public HF Spaces URL returns BM25 and dense results side-by-side.
 **Key files:** `app.py`, `data.py`, `retrievers/bm25.py`, `retrievers/dense.py`, `config.py`
 
 ---
 
-### M1 · BM25 Baseline + Eval Harness
+### M1 · BM25 Baseline + Eval Harness ✅
 **Scope:** Full corpus. Build the eval loop you'll reuse forever. Establish baseline numbers.
-**New files to create:**
-- `src/codesearch/eval/metrics.py` — implement MRR@10, nDCG@10, Recall@100
-- `src/codesearch/eval/harness.py` — iterate eval queries, call retriever, aggregate metrics
-- Update `data.py` to support full corpus loading (`SMOKE_TEST_SIZE=-1`)
+**Files created:**
+- `src/codesearch/eval/metrics.py` — MRR@10, nDCG@10, Recall@100
+- `src/codesearch/eval/harness.py` — eval loop over all queries
+- Updated `data.py` to full corpus loading, correct `func_code_url` IDs, `func_code_tokens` field
+- Switched BM25 from `rank_bm25` to `bm25s` (vectorized, ~200x faster)
 
-**Done when:** `python -m codesearch.eval.harness --retriever bm25` prints a metrics table.
-Baseline numbers committed to README ablation table.
+**Results (full corpus, 22k queries):** MRR@10=0.2747, nDCG@10=0.3020, Recall@100=0.5208
 
 **Concept checkpoint:** Can explain what MRR@10=0.X means for a user, and why Recall@100
 is more important than MRR@10 for evaluating the retriever stage in a RAG pipeline.

@@ -27,11 +27,11 @@ Eval setup: 1+999 random distractors per query (not full corpus). Only MRR is re
 
 ### Our progress
 
-Eval setup: full 434k-doc corpus, 1k sampled queries (seed=42), BM25 indexes `func_code_tokens` (docstrings stripped).
+Eval setup: full 434k-doc corpus, 22k queries, BM25 indexes `func_code_tokens` (docstrings stripped).
 
 | Retriever | Model | MRR@10 | nDCG@10 | Recall@100 | Milestone |
 |-----------|-------|--------|---------|------------|-----------|
-| BM25 | — | 0.2731 | 0.2973 | 0.5070 | M1 ✅ |
+| BM25 | — | 0.2747 | 0.3020 | 0.5208 | M1 ✅ |
 | Dense | MiniLM-L6-v2 | — | — | — | M2 |
 | Hybrid (RRF) | MiniLM + BM25 | — | — | — | M3 |
 | Hybrid + Rerank | + cross-encoder | — | — | — | M3 |
