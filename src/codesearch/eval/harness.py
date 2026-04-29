@@ -22,8 +22,9 @@ from codesearch.config import SMOKE_TEST_SIZE
 from codesearch.data import load_codesearch
 from codesearch.eval.metrics import mean_ndcg, mean_recall, mean_reciprocal_rank
 from codesearch.retrievers.bm25 import BM25Retriever
+from codesearch.retrievers.dense import DenseRetriever
 
-_RETRIEVER_CHOICES = ["bm25"]
+_RETRIEVER_CHOICES = ["bm25", "dense"]
 _SAMPLE_SEED = 42
 
 
@@ -35,7 +36,8 @@ class Retriever(Protocol):
 def _build_retriever(name: str, corpus: list[dict]) -> Retriever:
     if name == "bm25":
         return BM25Retriever(corpus)
-    # M2: elif name == "dense":  return DenseRetriever(corpus)
+    if name == "dense":
+        return DenseRetriever()
     # M3: elif name == "hybrid": return HybridRetriever(corpus)
     raise ValueError(f"Unknown retriever '{name}'. Available: {_RETRIEVER_CHOICES}")
 

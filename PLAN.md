@@ -187,8 +187,10 @@ is more important than MRR@10 for evaluating the retriever stage in a RAG pipeli
 
 ---
 
-### M2 · Dense Retrieval
+### M2 · Dense Retrieval ✅
 **Scope:** Full corpus embedding + indexing. Dense retrieval path. Head-to-head vs BM25.
+
+**Results (full corpus, 22k queries):** MRR@10=0.3891, nDCG@10=0.4309, Recall@100=0.7520
 **Changes:**
 - Add offline indexing script: `scripts/index_corpus.py` — run once, not at app boot
 - Update `app.py` to skip re-indexing if collection already populated

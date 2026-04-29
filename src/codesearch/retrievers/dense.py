@@ -31,7 +31,9 @@ from qdrant_client.models import (
     VectorParams,
     PointStruct,
     SearchRequest,
+    SearchParams,
 )
+from qdrant_client.http.models import QueryRequest
 from tqdm import tqdm
 
 from codesearch.config import (
@@ -107,8 +109,8 @@ class DenseRetriever:
             print("Collection already populated — skipping indexing. Pass recreate_collection=True to re-index.")
             return
 
-        print(f"Embedding {len(corpus)} documents (field: code)...")
-        texts = [doc["code"] for doc in corpus]
+        print(f"Embedding {len(corpus)} documents (field: code_tokens)...")
+        texts = [doc["code_tokens"] for doc in corpus]
 
         # SentenceTransformer.encode() handles batching internally,
         # but tqdm progress requires manual batching.
@@ -177,3 +179,63 @@ class DenseRetriever:
             }
             for r in results.points
         ]
+
+    def retrieve_batch(
+        self, queries: list[str], top_k: int = 100, ef_search: int = 128
+    ) -> list[list[dict]]:
+        """
+        Embed all queries at once and search Qdrant for each.
+
+        Batch-encoding is faster than calling retrieve() in a loop because
+        sentence-transformers can parallelize the forward pass across the batch.
+        The eval harness uses this fast path when available.
+
+        Args:
+            queries:   list of natural language query strings
+            top_k:     results per query (default 100 for Recall@100 eval)
+            ef_search: HNSW beam width (higher = better recall, slower)
+
+        Returns:
+            List of result lists, one per query. Each result list is
+            [{id, code, docstring, url, score}, ...] sorted by score desc.
+        """
+        query_vectors = self.model.encode(
+            queries,
+            normalize_embeddings=True,
+            show_progress_bar=False,
+            batch_size=256,
+        ).tolist()
+
+        _SEARCH_BATCH = 50  # queries per HTTP request to Qdrant
+
+        all_results = []
+        total_batches = (len(query_vectors) + _SEARCH_BATCH - 1) // _SEARCH_BATCH
+        for i in tqdm(range(0, len(query_vectors), _SEARCH_BATCH), total=total_batches, desc="Searching Qdrant"):
+            chunk = query_vectors[i : i + _SEARCH_BATCH]
+            requests = [
+                QueryRequest(
+                    query=qvec,
+                    limit=top_k,
+                    params=SearchParams(hnsw_ef=ef_search),
+                    with_payload=True,
+                )
+                for qvec in chunk
+            ]
+            responses = self.client.query_batch_points(
+                collection_name=self.collection,
+                requests=requests,
+            )
+            for resp in responses:
+                all_results.append(
+                    [
+                        {
+                            "id": r.payload["doc_id"],
+                            "code": r.payload["code"],
+                            "docstring": r.payload["docstring"],
+                            "url": r.payload["url"],
+                            "score": r.score,
+                        }
+                        for r in resp.points
+                    ]
+                )
+        return all_results

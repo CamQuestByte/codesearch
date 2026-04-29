@@ -32,7 +32,7 @@ Eval setup: full 434k-doc corpus, 22k queries, BM25 indexes `func_code_tokens` (
 | Retriever | Model | MRR@10 | nDCG@10 | Recall@100 | Milestone |
 |-----------|-------|--------|---------|------------|-----------|
 | BM25 | — | 0.2747 | 0.3020 | 0.5208 | M1 ✅ |
-| Dense | MiniLM-L6-v2 | — | — | — | M2 |
+| Dense | MiniLM-L6-v2 | 0.3891 | 0.4309 | 0.7520 | M2 ✅ |
 | Hybrid (RRF) | MiniLM + BM25 | — | — | — | M3 |
 | Hybrid + Rerank | + cross-encoder | — | — | — | M3 |
 | Dense | _(code-specific)_ | — | — | — | M5 optional |
