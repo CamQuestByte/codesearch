@@ -32,15 +32,17 @@ Eval setup: full 434k-doc corpus, 22k queries, BM25 indexes `func_code_tokens` (
 | Retriever | Model | MRR@10 | nDCG@10 | Recall@100 | Milestone |
 |-----------|-------|--------|---------|------------|-----------|
 | BM25 | — | 0.2747 | 0.3020 | 0.5208 | M1 ✅ |
-| Dense | MiniLM-L6-v2 | 0.3891 | 0.4309 | 0.7520 | M2 ✅ |
+| Dense | MiniLM-L6-v2 | 0.3891 (+0.1144) | 0.4309 (+0.1289) | 0.7520 (+0.2312) | M2 ✅ |
 | Hybrid (RRF) | MiniLM + BM25 | — | — | — | M3 |
 | Hybrid + Rerank | + cross-encoder | — | — | — | M3 |
 | Dense | _(code-specific)_ | — | — | — | M5 optional |
 
+Deltas are vs BM25 baseline. **Recall@100 jumps 23.1pp** going from sparse to dense — the model bridges the natural-language-query → code vocabulary gap that BM25 cannot. This is the motivating data point for M3: there is 23pp of headroom available to a reranker on top of dense, but only ~8pp on top of BM25 alone.
+
 ## Stack
 
 - **Dataset:** CodeSearchNet Python split (~400k functions, 4k eval queries)
-- **BM25:** `rank_bm25`
+- **BM25:** `bm25s` (vectorized; ~200x faster than `rank_bm25` on full corpus)
 - **Embeddings:** `sentence-transformers` (local, no API cost)
 - **Vector DB:** Qdrant Cloud (free tier, 1GB)
 - **UI:** Gradio on Hugging Face Spaces (free)
@@ -50,8 +52,8 @@ Eval setup: full 434k-doc corpus, 22k queries, BM25 indexes `func_code_tokens` (
 | Milestone | Status |
 |-----------|--------|
 | M0 · Hello World | ✅ done |
-| M1 · BM25 Baseline + Eval | ⬜ not started |
-| M2 · Dense Retrieval | ⬜ not started |
+| M1 · BM25 Baseline + Eval | ✅ done |
+| M2 · Dense Retrieval | ✅ done |
 | M3 · Hybrid + Reranking | ⬜ not started |
 | M4 · UI + Deployment | ⬜ not started |
 | M5 · Model Swap (optional) | ⬜ not started |
