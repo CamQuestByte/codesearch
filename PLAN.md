@@ -234,6 +234,218 @@ sensitivity (0.7pp range) — the easy near-neighbors are found by any beam
 width; only the deep top-100 needs a wide one. This matters for M3: the
 reranker depends on Recall@100 to have anything to work with.
 
+**Qualitative comparison.** Aggregate metrics like MRR are necessary but
+insufficient — they don't show *which kinds of queries* each retriever
+wins on. See `scripts/compare_retrievers.py`: for each query, compute the
+rank of the relevant doc in BM25 and dense (top-100 each), then classify
+by margin. "Winner" = relevant doc at rank ≤ 5; "loser" = rank > 20 or
+missing. The gap between 5 and 20 is deliberate — it filters out ambiguous
+cases so the remaining wins have an articulable reason.
+
+Final bucket breakdown (full corpus, n=22,176 queries):
+
+| Bucket | Count | % of queries |
+|--------|-------|--------------|
+| Dense ≫ BM25  | 4,415 | 19.9% |
+| BM25 ≫ Dense  | 1,287 | 5.8% |
+| Both at rank #1 | 2,765 | 12.5% |
+| Gray zone (no clear winner) | 13,709 | 61.8% |
+
+**Dense:BM25 win ratio = 3.4 : 1.** The breakdown was already within 1pp
+of final at n=2,000 — the test is sample-stable.
+
+#### Example 1 — Dense win (vocabulary gap)
+
+**Query:**
+> Calculate the SVD of a blocked RDD directly, returning only the leading
+> k singular vectors. Assumes n rows and d columns, efficient when n >> d.
+> Must be able to fit d^2 within the memory of a single machine.
+
+**Ground truth** — [sparkit-learn / truncated_svd.py#L15-L52](https://github.com/lensacom/sparkit-learn/blob/0498502107c1f7dcf33cda0cdb6f5ba4b42524b7/splearn/decomposition/truncated_svd.py#L15-L52)
+```python
+def svd(blocked_rdd, k):
+    """
+    Calculate the SVD of a blocked RDD directly, returning only the leading k
+    singular vectors. Assumes n rows and d columns, efficient when n >> d
+    ...
+```
+
+**Dense rank #1** ✅ &nbsp; **BM25 rank >100** ❌
+
+**What BM25 picked instead** — [apache/spark distributed.py#L1051-L1071](https://github.com/apache/spark/blob/618d6bff71073c8c93501ab7392c3cc579730f0b/python/pyspark/mllib/linalg/distributed.py#L1051-L1071)
+```python
+def blocks(self):
+    """
+    The RDD of sub-matrix blocks
+    ((blockRowIndex, blockColIndex), sub-matrix) that form this
+    ...
+```
+
+**Why dense wins.** `func_code_tokens` strips docstrings, so the GT's code
+carries only `svd`, `blocked_rdd`, `k`, plus numpy ops — none of which are
+in the query. The query is rich English ("SVD", "singular vectors",
+"leading", "efficient when n >> d") that the code body simply doesn't
+share. BM25 latches onto the one cross-vocabulary overlap ("blocks") and
+ranks Apache Spark's `blocks()` RDD method above the actual answer.
+MiniLM bridges NL→code because "SVD" and `numpy.linalg.svd`-style code
+co-occur in its training data.
+
+#### Example 2 — BM25 win (rare-identifier fingerprint)
+
+**Query:**
+> Decode value of symbol together with the extra bits.
+> `>>> d = DistanceAlphabet('D', NPOSTFIX=2, NDIRECT=10)`
+> `>>> d[34].value(2)`
+> `(0, 35)`
+
+**Ground truth** — [google/brotli brotlidump.py#L1145-L1165](https://github.com/google/brotli/blob/4b2b2d4f83ffeaac7708e44409fe34896a01a278/research/brotlidump.py#L1145-L1165)
+```python
+def value(self, dcode, dextra):
+    """Decode value of symbol together with the extra bits.
+    >>> d = DistanceAlphabet('D', NPOSTFIX=2, NDIRECT=10)
+    >>> d[34].value(2)
+    ...
+```
+
+**BM25 rank #2** ✅ &nbsp; **Dense rank >100** ❌
+
+**What dense picked instead** — [pierre-rouanet/hampy hamming.py#L52-L82](https://github.com/pierre-rouanet/hampy/blob/bb633a3936f8a3b5f619fb0d92c7448f3dc3c92d/hampy/hamming.py#L52-L82)
+```python
+def decode(C):
+    """ Decode data using Hamming(7, 4) code.
+    ...
+```
+
+**Why BM25 wins.** The query carries three near-unique identifiers —
+`DistanceAlphabet`, `NPOSTFIX`, `NDIRECT` — that are Brotli-compression-
+specific and effectively unique in the corpus. BM25's IDF turns rarity
+into a power tool: those terms have astronomical weight, and only docs
+in `brotlidump.py` get the boost. Dense made the conceptually plausible
+but wrong call: "decode + symbol + bits" maps semantically near *Hamming
+code decoding*, so MiniLM surfaced a Hamming decoder from a different
+library. The bi-encoder has no knowledge that "this specific codebase
+uses these specific names" — rare identifiers are exactly where lexical
+retrieval wins.
+
+#### Example 3 — Tie (both signals aligned)
+
+**Query:**
+> Get historical usage metrics. webspace_name: The name of the webspace.
+> website_name: The name of the website. metrics: Optional. List of
+> metrics name. Otherwise, all metrics returned…
+
+**Ground truth** — [Azure/azure-sdk-for-python websitemanagementservice.py#L210-L237](https://github.com/Azure/azure-sdk-for-python/blob/d7306fde32f60a293a7567678692bdad31e4b667/azure-servicemanagement-legacy/azure/servicemanagement/websitemanagementservice.py#L210-L237)
+```python
+def get_historical_usage_metrics(self, webspace_name, website_name,
+                                 metrics=None, start_time=None,
+                                 end_time=None, time_grain=None):
+    '''
+    Get historical usage metrics.
+    ...
+```
+
+**BM25 rank #1** ✅ &nbsp; **Dense rank #1** ✅
+
+**Why both win.** The function name and parameter names —
+`get_historical_usage_metrics`, `webspace_name`, `website_name`,
+`metrics` — are paraphrases of the query itself. BM25 has direct token
+overlap on rare identifiers (high IDF). Dense has direct semantic match
+because the function is named after what it does. When the query is
+essentially a natural-language reading of an already-descriptive Python
+signature, neither retriever is the bottleneck — they just agree.
+
+#### Twin-function disambiguation (M3 motivation)
+
+Two final examples illustrate the *same phenomenon from opposite
+directions* — neither retriever reliably disambiguates near-twin
+functions in the same file.
+
+**Twin example A — dense disambiguates a single-token swap.**
+
+Query:
+> Downloads a Sina video by its unique **vid**.
+> `http://video.sina.com.cn/`
+
+Ground truth — [soimort/you-get sina.py#L41-L52](https://github.com/soimort/you-get/blob/b746ac01c9f39de94cac2d56f665285b0523b974/src/you_get/extractors/sina.py#L41-L52)
+```python
+def sina_download_by_vid(vid, title=None, output_dir='.',
+                         merge=True, info_only=False):
+    """Downloads a Sina video by its unique vid.
+    http://video.sina.com.cn/
+    """
+```
+
+**Dense rank #1** ✅ &nbsp; **BM25 rank >100** ❌
+
+BM25's top-1 was the *near-twin* in the same file — [sina.py#L54-L64](https://github.com/soimort/you-get/blob/b746ac01c9f39de94cac2d56f665285b0523b974/src/you_get/extractors/sina.py#L54-L64):
+```python
+def sina_download_by_vkey(vkey, title=None, output_dir='.',
+                          merge=True, info_only=False):
+    """Downloads a Sina video by its unique vkey.
+    http://video.sina.com/
+    """
+```
+
+With docstrings stripped, the two functions' `func_code_tokens` are
+near-identical to BM25 (`def`, `sina_download_by_v(id|key)`, parameter
+names…). The single disambiguating token in the query ("vid") gets
+diluted in sparse scoring. Dense weighs it correctly because in the
+embedding space `vid` carries the "video-ID concept" signal distinctly
+from `vkey`.
+
+**Twin example B — BM25 confuses a verb swap.**
+
+Query:
+> Post the content of a URL via sending a HTTP **POST** request.
+> Args: url: A URL. headers: Request headers used by the client.
+> decoded: Whether decode the response body…
+
+Ground truth — [soimort/you-get common.py#L457-L501](https://github.com/soimort/you-get/blob/b746ac01c9f39de94cac2d56f665285b0523b974/src/you_get/common.py#L457-L501)
+```python
+def post_content(url, headers={}, post_data={}, decoded=True, **kwargs):
+    """Post the content of a URL via sending a HTTP POST request.
+    Args:
+    ...
+```
+
+**BM25 rank #3** ⚠️ &nbsp; **Dense rank >100** ❌
+
+BM25 put the GT in top-5 but its top-1 was the *GET* twin — [common.py#L415-L454](https://github.com/soimort/you-get/blob/b746ac01c9f39de94cac2d56f665285b0523b974/src/you_get/common.py#L415-L454):
+```python
+def get_content(url, headers={}, decoded=True):
+    """Gets the content of a URL via sending a HTTP GET request.
+    ...
+```
+
+BM25's lexical signal couldn't distinguish "get" vs "post" reliably enough
+— both functions live in the same file, share parameter names, and have
+docstrings stripped. Dense missed both versions and generalized out to a
+`post()` method in a boatd HTTP client library.
+
+**The symmetry is the M3 pitch.** Each retriever fails on different
+near-twins, but **neither succeeds at twin-disambiguation reliably**.
+RRF alone won't fix this (both rank lists prefer the wrong twin in
+example B). A cross-encoder, which scores query-and-candidate-code
+*as a pair*, is the decisive piece — it can read the actual verb
+("Post" vs "Gets") in both query and code body simultaneously.
+
+#### Gray-zone significance
+
+61.8% of queries fall into the no-clear-winner zone (both retrievers in
+rank 6–100, or both missing entirely). This is the biggest opportunity
+surface for M3:
+
+- **RRF** promotes "rank 15 in both lists" candidates into a fused top-5
+  via `1/(60+15) + 1/(60+15)` ≈ 0.027 — beating singletons that only
+  appear in one list.
+- **Cross-encoder reranker** then lifts the right candidate to #1 by
+  reading query and code side-by-side.
+
+#### Deferred from M2 — see auto-memory TODOs
+
+- Single-query latency benchmark (P50/P90/P95 BM25 vs dense end-to-end)
+- Cost comparison axis (storage, build/serve compute, $/mo at target QPS)
+
 ---
 
 ### M3 · Hybrid Retrieval + Reranking
