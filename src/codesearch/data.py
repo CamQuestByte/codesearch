@@ -44,18 +44,42 @@ def _make_doc(row: dict) -> dict:
     }
 
 
-def load_codesearch(n: int = SMOKE_TEST_SIZE) -> tuple[list[dict], list[dict]]:
+def load_codesearch(
+    n: int = SMOKE_TEST_SIZE,
+    queries_only: bool = False,
+) -> tuple[list[dict], list[dict]]:
     """
     Load CodeSearchNet Python split.
 
     Args:
         n: -1 = full corpus (train + test, ~434k docs).
            n > 0 = smoke-test: first n docs from test split only.
+        queries_only: if True, skip building the corpus list (saves the ~412k train
+                      split scan). Returns ([], queries). Use when only the eval
+                      queries are needed and the corpus already lives in an external
+                      store (e.g., Qdrant). Only valid with n=-1.
 
     Returns:
         (corpus, queries) — see module docstring for schema.
+        When queries_only=True, corpus is [].
     """
     raw_test = load_dataset("code_search_net", "python", split="test")
+
+    if queries_only:
+        if n != -1:
+            raise ValueError("queries_only=True requires n=-1 (full corpus mode).")
+        print("Loading CodeSearchNet Python split (queries only — skipping corpus)...")
+        queries: list[dict] = []
+        for row in tqdm(raw_test, desc="Building queries"):
+            url = row["func_code_url"]
+            if not url:
+                continue
+            text = row["func_documentation_string"]
+            if not text or not text.strip():
+                continue
+            queries.append({"id": f"q_{url}", "query": text, "relevant_id": url})
+        print(f"Loaded {len(queries):,} eval queries (corpus skipped).")
+        return [], queries
 
     corpus: list[dict] = []
     seen_urls: set[str] = set()

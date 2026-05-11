@@ -199,8 +199,40 @@ is more important than MRR@10 for evaluating the retriever stage in a RAG pipeli
 **Done when:** Ablation table has two rows. Can explain one query where dense wins and one
 where BM25 wins with a concrete reason (not just "dense is better at semantics").
 
-**Concept checkpoint:** Understand what HNSW `ef` parameter controls. Run one experiment:
-`ef=32` vs `ef=128` vs `ef=512` — note recall and latency at each setting.
+**Concept checkpoint:** Understand what HNSW `ef_search` controls. Run a sweep,
+note recall and latency at each setting. See `scripts/ef_sweep.py` (reads cached
+query vectors from `scripts/cache_query_vectors.py`; uses Qdrant's REST response
+`time` field for server-only latency, separate from client wall time).
+
+Sweep results (n=500 sampled queries, seed=42, top-100):
+
+| ef  | MRR@10 | Recall@100 | server ms/q | wall ms/q |
+|-----|--------|------------|-------------|-----------|
+| 16  | 0.3711 | 0.7240     | 5.50        | 13.87     |
+| 32  | 0.3711 | 0.7240     | 5.55        | 11.81     |
+| 64  | 0.3741 | 0.7380     | 5.84        | 14.86     |
+| 128 | 0.3764 | 0.7520     | 8.87        | 16.66     |
+| 256 | 0.3779 | 0.7560     | 14.17       | 21.71     |
+| 512 | 0.3784 | 0.7600     | 23.85       | 30.72     |
+
+Findings:
+1. **ef floor exists between 32 and 64.** ef=16 and ef=32 produce bit-identical
+   metrics and server time — Qdrant clamps the effective ef to a minimum.
+   Asking for ef<64 is a no-op.
+2. **Recall halves with each doubling above the floor** (textbook HNSW shape):
+   64→128 = +1.4pp, 128→256 = +0.4pp, 256→512 = +0.4pp. By ef=256 you've
+   captured ~95% of the recall available.
+3. **Server time linearizes in ef above the floor** (+1 ms per +20 ef). Below
+   the floor, network RTT to Qdrant Cloud (~8 ms/query) dominates and `ef`
+   tuning is invisible at the client.
+4. **ef=128 is the sweet spot.** ef=64 is a viable lower-latency alternative
+   (-1.4pp recall, -35% server time) if a strong reranker is downstream.
+   ef=512 is never worth it here.
+
+Recall@100 sensitivity to `ef` (3.6pp range) is much higher than MRR@10
+sensitivity (0.7pp range) — the easy near-neighbors are found by any beam
+width; only the deep top-100 needs a wide one. This matters for M3: the
+reranker depends on Recall@100 to have anything to work with.
 
 ---
 
