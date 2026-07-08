@@ -70,7 +70,7 @@ def load_codesearch(
             raise ValueError("queries_only=True requires n=-1 (full corpus mode).")
         print("Loading CodeSearchNet Python split (queries only — skipping corpus)...")
         queries: list[dict] = []
-        for row in tqdm(raw_test, desc="Building queries"):
+        for row in tqdm(raw_test, desc="Building eval queries from test docstrings"):
             url = row["func_code_url"]
             if not url:
                 continue
@@ -86,7 +86,7 @@ def load_codesearch(
 
     if n != -1:
         print(f"Loading CodeSearchNet Python split (smoke-test, n={n})...")
-        for row in tqdm(raw_test, desc="Building corpus"):
+        for row in tqdm(raw_test, desc="Adding test split to corpus (smoke-test)"):
             if len(corpus) >= n:
                 break
             url = row["func_code_url"]
@@ -98,7 +98,7 @@ def load_codesearch(
         print("Loading CodeSearchNet Python split (full corpus)...")
         raw_train = load_dataset("code_search_net", "python", split="train")
         for split_name, raw in [("train", raw_train), ("test", raw_test)]:
-            for row in tqdm(raw, desc=f"Building corpus ({split_name})"):
+            for row in tqdm(raw, desc=f"Adding {split_name} split to corpus"):
                 url = row["func_code_url"]
                 if not url or url in seen_urls:
                     continue
@@ -110,7 +110,7 @@ def load_codesearch(
     # Queries: test-split docstrings whose function is in the corpus.
     # relevant_id = func_code_url, which is the doc["id"] of the target function.
     queries: list[dict] = []
-    for row in tqdm(raw_test, desc="Building queries"):
+    for row in tqdm(raw_test, desc="Building eval queries from test docstrings"):
         url = row["func_code_url"]
         if url not in corpus_ids:
             continue

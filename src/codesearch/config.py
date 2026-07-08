@@ -7,6 +7,13 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# Quiet the transformers "weight not used / UNEXPECTED" table that fires every
+# time SentenceTransformer loads MiniLM. The unused key is `embeddings.position_ids`,
+# a buffer the newer transformers release dropped from the BertModel state dict; the
+# message is informational and safe to ignore for this checkpoint.
+import transformers  # noqa: E402
+transformers.logging.set_verbosity_error()
+
 
 # --- Qdrant ---
 QDRANT_URL: str = os.environ["QDRANT_URL"]

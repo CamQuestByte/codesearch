@@ -33,11 +33,17 @@ Eval setup: full 434k-doc corpus, 22k queries, BM25 indexes `func_code_tokens` (
 |-----------|-------|--------|---------|------------|-----------|
 | BM25 | — | 0.2747 | 0.3020 | 0.5208 | M1 ✅ |
 | Dense | MiniLM-L6-v2 | 0.3891 (+0.1144) | 0.4309 (+0.1289) | 0.7520 (+0.2312) | M2 ✅ |
-| Hybrid (RRF) | MiniLM + BM25 | — | — | — | M3 |
-| Hybrid + Rerank | + cross-encoder | — | — | — | M3 |
+| Hybrid (RRF) | MiniLM + BM25 | 0.3977 (+0.1230) | 0.4475 (+0.1455) | 0.7750 (+0.2542) | M3.1 ✅ |
+| Hybrid + Rerank | + `ms-marco-MiniLM-L-6-v2` | 0.3938 * (+0.1191) | 0.4425 * (+0.1405) | 0.7740 * (+0.2532) | M3.2 ✅ |
 | Dense | _(code-specific)_ | — | — | — | M5 optional |
 
+<sub>*Sample n=2000, seed=42, SE≈0.01 on MRR@10. Full 22k eval running in background; row will update when it lands.*</sub>
+
 Deltas are vs BM25 baseline. **Recall@100 jumps 23.1pp** going from sparse to dense — the model bridges the natural-language-query → code vocabulary gap that BM25 cannot. This is the motivating data point for M3: there is 23pp of headroom available to a reranker on top of dense, but only ~8pp on top of BM25 alone.
+
+**M3.1 — Hybrid RRF lifts Recall@100 by +2.3pp on top of dense** (0.7520 → 0.7750), with a much smaller MRR@10 lift (+0.86pp). That's the expected RRF signature: fusion promotes "rank-15 in both lists" candidates into the fused top-50 (fattening the pool for a downstream reranker), but it rarely lifts anything to rank-1 by itself. The Recall headroom from set-union over the same K is +5pp above RRF — flagged as the lever to pull if M3.2 underperforms.
+
+**M3.2 — the MS MARCO cross-encoder does not produce a significant lift over hybrid RRF.** Same-seed A/B at n=2000: hybrid MRR@10=0.3902, hybrid+rerank MRR@10=0.3938 — a +0.36pp delta that sits comfortably inside the noise floor (SE≈0.01, ~0.4σ). nDCG@10 moves +0.43pp on the same slice, also inside noise. Recall@100 is identical (0.7740) by construction — the reranker only reorders the pool it's given. Both metrics happen to point positive, but at this sample size that's as likely to be sampling variance as a real effect. Even in the most generous read (~0.4pp real), the cost is ~24h CPU per full 22k eval (2.2M CE forward passes at ~25 pair/s on the eval laptop) — poor ROI. The most likely explanation is the domain gap: MS MARCO CE was trained on NL→NL passage ranking and reads `code_tokens` (space-joined AST tokens) as an alien input. **The honest takeaway: off-the-shelf NL cross-encoders do not meaningfully improve hybrid RRF on NL→code retrieval.** M5 explores whether code-aware CEs (CodeBERT / UniXcoder-based) or richer candidate text (AST-stripped `whole_func_string`) can produce a real lift.
 
 ## Stack
 
@@ -54,7 +60,7 @@ Deltas are vs BM25 baseline. **Recall@100 jumps 23.1pp** going from sparse to de
 | M0 · Hello World | ✅ done |
 | M1 · BM25 Baseline + Eval | ✅ done |
 | M2 · Dense Retrieval | ✅ done |
-| M3 · Hybrid + Reranking | ⬜ not started |
+| M3 · Hybrid + Reranking | ✅ done |
 | M4 · UI + Deployment | ⬜ not started |
 | M5 · Model Swap (optional) | ⬜ not started |
 

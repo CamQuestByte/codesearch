@@ -43,11 +43,11 @@ from codesearch.config import (
 from codesearch.data import load_codesearch
 from codesearch.retrievers.bm25 import BM25Retriever
 from codesearch.retrievers.bm25_index import BM25Index
+from codesearch.retrievers.hybrid import rrf_fuse
 
 _SAMPLE_SEED = 42
 _MAX_K = 100
 _POOL_SIZES = (20, 50, 100)
-_RRF_K = 60
 _SEARCH_BATCH = 50
 CACHE_DIR = ".cache"
 BM25_CACHE_DIR = ".cache/bm25"
@@ -101,28 +101,9 @@ def dense_search_batch(http: httpx.Client, vectors: list[list[float]], ef: int =
     return hits_all
 
 
-def rrf_fuse(bm25_ids: list[str], dense_ids: list[str], k: int, rrf_k: int = _RRF_K) -> list[str]:
-    """
-    Fuse two ranked lists into one via Reciprocal Rank Fusion, return top-k.
-
-    score(d) = 1/(rrf_k + rank_bm25(d)) + 1/(rrf_k + rank_dense(d))
-    Missing in a list is treated as rank k+1 (just past the bottom of that pool).
-    """
-    missing_rank = k + 1
-    scores: dict[str, float] = {}
-    for rank, doc_id in enumerate(bm25_ids[:k], start=1):
-        scores[doc_id] = scores.get(doc_id, 0.0) + 1.0 / (rrf_k + rank)
-    for rank, doc_id in enumerate(dense_ids[:k], start=1):
-        scores[doc_id] = scores.get(doc_id, 0.0) + 1.0 / (rrf_k + rank)
-    # Penalize singletons by adding the missing-list contribution at rank k+1.
-    bm25_set = set(bm25_ids[:k])
-    dense_set = set(dense_ids[:k])
-    for doc_id in dense_set - bm25_set:
-        scores[doc_id] += 1.0 / (rrf_k + missing_rank)
-    for doc_id in bm25_set - dense_set:
-        scores[doc_id] += 1.0 / (rrf_k + missing_rank)
-    ranked = sorted(scores.items(), key=lambda kv: -kv[1])
-    return [doc_id for doc_id, _ in ranked[:k]]
+def _id_dicts(ids: list[str]) -> list[dict]:
+    """Wrap doc-ids as minimal hit-dicts for rrf_fuse (which takes dicts)."""
+    return [{"id": i} for i in ids]
 
 
 def recall(hit_lists: list[list[str]], relevant: list[str], k: int) -> float:
@@ -197,7 +178,8 @@ def main() -> None:
         r_dense = recall(dense_hits, relevant, k)
 
         rrf_hits = [
-            rrf_fuse(b_ids, d_ids, k=k) for b_ids, d_ids in zip(bm25_hits, dense_hits)
+            [h["id"] for h in rrf_fuse(_id_dicts(b_ids[:k]), _id_dicts(d_ids[:k]), top_k=k)]
+            for b_ids, d_ids in zip(bm25_hits, dense_hits)
         ]
         r_rrf = recall(rrf_hits, relevant, k)
 

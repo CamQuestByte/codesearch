@@ -11,3 +11,6 @@ build/
 .DS_Store
 gradio_cached_examples/
 flagged/
+report.md
+report_multi_session.md
+.claude-sessions/
