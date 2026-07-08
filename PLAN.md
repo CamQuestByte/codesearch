@@ -65,7 +65,10 @@ Embeddings are computed **locally** with sentence-transformers. No OpenAI API de
 ### Vector DB
 
 **Qdrant Cloud free tier.**
-- 1 cluster, 1GB RAM, no expiry
+- 1 cluster, 1GB RAM
+- Clusters are reaped after extended idle (~weeks); confirmed 2026-06-29 when the M2
+  cluster was deleted after ~6 weeks of inactivity. Re-indexing 434k MiniLM vectors
+  takes ~15-20 min on CPU, so this is recoverable but not free.
 - ~400k × 384-dim vectors ≈ 600MB — fits with room to spare
 - Do not use 768-dim models or you will be tight on free tier
 - Collection name controlled by `QDRANT_COLLECTION` env var
