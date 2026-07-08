@@ -24,6 +24,10 @@ HNSW `ef_search` parameter (set at query time):
 
 from __future__ import annotations
 
+import pickle
+from pathlib import Path
+
+import numpy as np
 from sentence_transformers import SentenceTransformer
 from qdrant_client import QdrantClient
 from qdrant_client.models import (
@@ -48,6 +52,13 @@ from codesearch.config import (
 # Reduce to 64 if you hit memory issues on HF Spaces.
 _BATCH_SIZE = 256
 
+_QUERY_CACHE_DIR = Path(".cache")
+
+
+def _query_cache_path(model_name: str) -> Path:
+    safe = model_name.replace("/", "_")
+    return _QUERY_CACHE_DIR / f"query_vectors_{safe}.pkl"
+
 
 class DenseRetriever:
     def __init__(self, recreate_collection: bool = False) -> None:
@@ -66,8 +77,37 @@ class DenseRetriever:
         self.client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
         self.collection = QDRANT_COLLECTION
 
+        self._query_cache: dict[str, np.ndarray] = {}
+        self._try_load_query_cache()
+
         if recreate_collection:
             self._create_collection()
+
+    def _try_load_query_cache(self) -> None:
+        """Populate self._query_cache from .cache/query_vectors_<model>.pkl if present.
+
+        The cache is built once by scripts/cache_query_vectors.py and keyed by
+        query text → np.ndarray. Silently no-ops if the file is missing; warns
+        and ignores if the file was built for a different embedding model.
+        """
+        path = _query_cache_path(EMBEDDING_MODEL)
+        if not path.exists():
+            return
+        with open(path, "rb") as f:
+            data = pickle.load(f)
+        if data.get("model") != EMBEDDING_MODEL:
+            print(
+                f"[dense] query-vector cache at {path} was built for "
+                f"{data.get('model')!r}, current model is {EMBEDDING_MODEL!r} — ignoring."
+            )
+            return
+        vectors = data["vectors"]
+        self._query_cache = {
+            q["query"]: vectors[i] for i, q in enumerate(data["queries"])
+        }
+        print(
+            f"[dense] loaded {len(self._query_cache):,} cached query vectors from {path}"
+        )
 
     def _create_collection(self) -> None:
         """Create (or recreate) the Qdrant collection."""
@@ -121,16 +161,14 @@ class DenseRetriever:
             all_vectors.extend(vecs.tolist())
 
         print("Upserting to Qdrant...")
+        # Payload kept minimal (doc_id only). code/docstring/url are looked up
+        # locally from the in-memory corpus at query time — Qdrant stores only
+        # what's needed to identify the doc. Matches scripts/index_corpus.py.
         points = [
             PointStruct(
                 id=i,
                 vector=all_vectors[i],
-                payload={
-                    "doc_id": corpus[i]["id"],
-                    "docstring": corpus[i]["docstring"],
-                    "code": corpus[i]["code"],
-                    "url": corpus[i]["url"],
-                },
+                payload={"doc_id": corpus[i]["id"]},
             )
             for i in range(len(corpus))
         ]
@@ -169,16 +207,54 @@ class DenseRetriever:
             search_params={"hnsw_ef": ef_search},
         )
 
+        # Payload is doc_id only — see index_corpus(). Downstream callers that
+        # need code/docstring/url look them up in the in-memory corpus by id.
         return [
-            {
-                "id": r.payload["doc_id"],
-                "code": r.payload["code"],
-                "docstring": r.payload["docstring"],
-                "url": r.payload["url"],
-                "score": r.score,
-            }
+            {"id": r.payload["doc_id"], "score": r.score}
             for r in results.points
         ]
+
+    def _embed_queries_with_cache(self, queries: list[str]) -> list[list[float]]:
+        """Return embedding vectors for queries, reusing the on-disk cache when present.
+
+        All-hit (typical eval path) skips model.encode entirely. Partial-hit encodes
+        only the missing texts and splices them into the right positions of the
+        returned list. No-cache falls back to a single batch encode with a tqdm bar.
+        """
+        if not self._query_cache:
+            return self.model.encode(
+                queries,
+                normalize_embeddings=True,
+                show_progress_bar=True,
+                batch_size=_BATCH_SIZE,
+            ).tolist()
+
+        miss_idx = [i for i, q in enumerate(queries) if q not in self._query_cache]
+        n_hit = len(queries) - len(miss_idx)
+
+        if not miss_idx:
+            print(f"[dense] {n_hit:,} queries served from cache (skipped encode)")
+            return [self._query_cache[q].tolist() for q in queries]
+
+        print(
+            f"[dense] query cache: {n_hit:,} hit / {len(miss_idx):,} miss — "
+            f"encoding misses"
+        )
+        miss_texts = [queries[i] for i in miss_idx]
+        miss_vecs = self.model.encode(
+            miss_texts,
+            normalize_embeddings=True,
+            show_progress_bar=True,
+            batch_size=_BATCH_SIZE,
+        )
+
+        out: list[list[float]] = [None] * len(queries)  # type: ignore[list-item]
+        for i, q in enumerate(queries):
+            if q in self._query_cache:
+                out[i] = self._query_cache[q].tolist()
+        for pos, vec in zip(miss_idx, miss_vecs):
+            out[pos] = vec.tolist()
+        return out
 
     def retrieve_batch(
         self, queries: list[str], top_k: int = 100, ef_search: int = 128
@@ -199,12 +275,7 @@ class DenseRetriever:
             List of result lists, one per query. Each result list is
             [{id, code, docstring, url, score}, ...] sorted by score desc.
         """
-        query_vectors = self.model.encode(
-            queries,
-            normalize_embeddings=True,
-            show_progress_bar=False,
-            batch_size=256,
-        ).tolist()
+        query_vectors = self._embed_queries_with_cache(queries)
 
         _SEARCH_BATCH = 50  # queries per HTTP request to Qdrant
 
@@ -228,13 +299,7 @@ class DenseRetriever:
             for resp in responses:
                 all_results.append(
                     [
-                        {
-                            "id": r.payload["doc_id"],
-                            "code": r.payload["code"],
-                            "docstring": r.payload["docstring"],
-                            "url": r.payload["url"],
-                            "score": r.score,
-                        }
+                        {"id": r.payload["doc_id"], "score": r.score}
                         for r in resp.points
                     ]
                 )
