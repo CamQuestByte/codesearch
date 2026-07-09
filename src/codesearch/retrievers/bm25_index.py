@@ -23,12 +23,31 @@ Disk layout (one directory per index):
 
 from __future__ import annotations
 
+import hashlib
 import os
 import pickle
 
 import bm25s
 
 _CORPUS_FILENAME = "corpus_dicts.pkl"
+_ID_FINGERPRINT = "id_order.sha256"
+
+
+def _hash_ids(corpus: list[dict]) -> str:
+    """SHA-256 over the corpus doc-id sequence.
+
+    bm25s scores by POSITIONAL index — retrieve() returns row numbers into the
+    corpus. A slim index (shipped without its corpus payload) is therefore only
+    valid against a corpus in the exact same order it was built from. This
+    fingerprint turns that invariant into a checked one: load_index_only()
+    refuses a corpus whose id-order doesn't match, so misalignment fails loud
+    instead of silently mis-ranking.
+    """
+    h = hashlib.sha256()
+    for doc in corpus:
+        h.update(doc["id"].encode("utf-8"))
+        h.update(b"\n")
+    return h.hexdigest()
 
 
 class BM25Index:
@@ -57,6 +76,19 @@ class BM25Index:
         with open(os.path.join(cache_dir, _CORPUS_FILENAME), "wb") as f:
             pickle.dump(self.corpus, f, protocol=pickle.HIGHEST_PROTOCOL)
 
+    def save_index_only(self, cache_dir: str) -> None:
+        """Write ONLY the bm25s native files + an id-order fingerprint.
+
+        Skips the large corpus pickle that save() writes. The corpus is
+        re-supplied at load time from wherever it already lives in memory
+        (on the Space, the HF-dataset corpus loaded at boot). This is the
+        ~150MB artifact shipped to the HF Space via LFS, vs. save()'s ~1.1GB.
+        """
+        os.makedirs(cache_dir, exist_ok=True)
+        self.index.save(cache_dir)
+        with open(os.path.join(cache_dir, _ID_FINGERPRINT), "w") as f:
+            f.write(_hash_ids(self.corpus))
+
     @classmethod
     def load(cls, cache_dir: str) -> "BM25Index":
         """Load an index + corpus payload previously written by save()."""
@@ -68,6 +100,34 @@ class BM25Index:
             )
         with open(corpus_path, "rb") as f:
             corpus = pickle.load(f)
+        return cls(index, corpus)
+
+    @classmethod
+    def load_index_only(cls, cache_dir: str, corpus: list[dict]) -> "BM25Index":
+        """Load a slim index (native files, no corpus pickle) and attach an
+        externally-supplied corpus, verifying it matches the build-time order.
+
+        Raises ValueError if the corpus id-order doesn't match the fingerprint
+        written by save_index_only() — catching a silent mis-ranking where the
+        positional index no longer lines up with the corpus rows.
+        """
+        index = bm25s.BM25.load(cache_dir)
+        fingerprint_path = os.path.join(cache_dir, _ID_FINGERPRINT)
+        if not os.path.exists(fingerprint_path):
+            raise FileNotFoundError(
+                f"{fingerprint_path} missing — cache_dir was not produced by "
+                f"save_index_only()."
+            )
+        with open(fingerprint_path) as f:
+            expected = f.read().strip()
+        actual = _hash_ids(corpus)
+        if actual != expected:
+            raise ValueError(
+                "Supplied corpus does not match the built BM25 index "
+                f"(id-order fingerprint {actual[:12]}… != {expected[:12]}…). "
+                "Rebuild the slim index, or check the corpus source / "
+                "SMOKE_TEST_SIZE matches the build."
+            )
         return cls(index, corpus)
 
     @staticmethod
