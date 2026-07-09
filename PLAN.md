@@ -459,13 +459,11 @@ surface for M3:
 | Retriever          | MRR@10   | nDCG@10  | Recall@100 | Sample     |
 |--------------------|----------|----------|------------|------------|
 | Hybrid RRF (M3.1)  | 0.3977   | 0.4475   | 0.7750     | full 22k   |
-| Hybrid + rerank (M3.2) | 0.3938 *| 0.4425 * | 0.7740 *   | n=2000     |
-
-\* n=2000, seed=42, SE≈0.01 on MRR@10. Full 22k eval pending.
+| Hybrid + rerank (M3.2) | 0.4011   | 0.4486   | 0.7750     | full 22k   |
 
 **M3.1 finding — RRF's signature lift is on Recall, not MRR.** +2.3pp Recall@100 vs dense, +0.9pp MRR@10. Fusion widens the top-100 pool for the reranker to pick from; rank-1 lift was expected to be M3.2's job.
 
-**M3.2 finding — off-the-shelf MS-MARCO CE does not meaningfully lift the ranking.** Same-seed A/B at n=2000: +0.36pp MRR, +0.43pp nDCG vs hybrid alone. Both deltas are ~0.4σ, individually inside the SE≈0.01 noise floor. Recall unchanged by construction (reranker only reorders). Best-case interpretation is a real +0.4pp effect; more parsimonious interpretation is sampling variance that happened to land positive. Full eval (SE≈0.003) is running; either way the effect is bounded and the ~24h CPU cost per full run is a poor trade. The most likely explanation is the domain gap: MS-MARCO CE is an NL passage ranker being asked to score NL-query / space-joined-AST-token pairs. Code-aware CE (CodeBERT / UniXcoder) and/or richer candidate text (AST-stripped `whole_func_string`) are the M5 upside.
+**M3.2 finding — off-the-shelf MS-MARCO CE gives only a marginal lift.** Full 22k eval: +0.34pp MRR (0.3977→0.4011), +0.11pp nDCG (0.4475→0.4486) vs hybrid alone; Recall unchanged by construction (reranker only reorders). The full eval confirms a real but tiny positive effect and resolves the earlier n=2000 confusion (where the sampled rerank MRR, 0.3938, sat slightly below full-hybrid). The ~24h CPU cost per full run (2.2M CE forward passes at ~26 pair/s) is a poor trade for +0.3pp. The most likely explanation is the domain gap: MS-MARCO CE is an NL passage ranker being asked to score NL-query / space-joined-AST-token pairs. Code-aware CE (CodeBERT / UniXcoder) and/or richer candidate text (AST-stripped `whole_func_string`) are the M5 upside.
 
 **RRF implementation note:** `score(d) = 1/(60 + rank_bm25(d)) + 1/(60 + rank_dense(d))`
 Documents that only appear in one list get `1/(60 + K+1)` for the missing list (treat as rank K+1).
