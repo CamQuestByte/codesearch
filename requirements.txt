@@ -1,10 +1,12 @@
 # HF Spaces build deps. Hand-maintained to mirror pyproject.toml runtime
 # dependencies (top-level only; pip resolves transitives — incl. torch via
 # sentence-transformers — against HF's base image). Keep in sync with pyproject.
+# gradio is intentionally omitted: HF installs it per README `sdk_version`
+# (6.13.0 — the version the app was smoke-tested on). Listing it here too risks
+# a pip-vs-SDK version fight. It stays a pyproject dep for local `python app.py`.
 bm25s>=0.3.4
 sentence-transformers>=3.0.0
 qdrant-client>=1.9.0
-gradio>=4.36.0
 datasets>=2.20.0
 python-dotenv>=1.0.0
 numpy>=1.26.0
