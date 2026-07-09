@@ -1,4 +1,7 @@
-rank-bm25>=0.2.2
+# HF Spaces build deps. Hand-maintained to mirror pyproject.toml runtime
+# dependencies (top-level only; pip resolves transitives — incl. torch via
+# sentence-transformers — against HF's base image). Keep in sync with pyproject.
+bm25s>=0.3.4
 sentence-transformers>=3.0.0
 qdrant-client>=1.9.0
 gradio>=4.36.0

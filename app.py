@@ -1,94 +1,166 @@
 """
-M0 Hello World — Gradio UI
+CodeSearch — Gradio UI
 
-Shows BM25 and dense results side-by-side for the same query.
-Uses SMOKE_TEST_SIZE docs (default: 100).
+Side-by-side comparison of four retrieval modes over CodeSearchNet Python:
+    BM25 · Dense (MiniLM) · Hybrid (RRF) · Hybrid + cross-encoder rerank
 
-To run locally:
-    python app.py
+Boot is NON-INDEXING by design:
+    - Dense vectors live in Qdrant, built offline via scripts/index_corpus.py.
+    - BM25 loads a prebuilt slim index (.cache/bm25-slim) in full-corpus mode.
+    - The app refuses to embed the corpus at boot (see the guard below).
 
-To deploy to HF Spaces:
-    - Push this repo to a HF Space (Gradio SDK)
-    - Set QDRANT_URL, QDRANT_API_KEY as Space secrets
-    - Set SMOKE_TEST_SIZE=100 for M0, -1 for full corpus (M4)
+Modes:
+    SMOKE_TEST_SIZE=-1  → full corpus; BM25 from the slim index. (HF Space secret)
+    SMOKE_TEST_SIZE=100 → local pipeline check; BM25 built in-memory. Dense/hybrid
+                          modes return full-Qdrant ids not in the small corpus, so
+                          only BM25 is meaningful in smoke mode.
 """
 
-import sys
 import os
+import sys
+import time
+import traceback
+
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "src"))
 
 import gradio as gr
 
+from codesearch.config import SMOKE_TEST_SIZE, TOP_K
 from codesearch.data import load_codesearch
 from codesearch.retrievers.bm25 import BM25Retriever
+from codesearch.retrievers.bm25_index import BM25Index
 from codesearch.retrievers.dense import DenseRetriever
-from codesearch.config import TOP_K
+from codesearch.retrievers.hybrid import HybridRetriever
+from codesearch.retrievers.reranker import CrossEncoderReranker
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+BM25_SLIM_DIR = os.path.join(_HERE, ".cache", "bm25-slim")
+
+# Candidate pool for hybrid fusion and reranking in the UI. Small on purpose:
+# reranking is inference-bound (~20 pairs/query on CPU), and K=20 keeps
+# hybrid+rerank under the 3s latency budget. Eval uses K=100 for Recall; the UI
+# trades a little recall for responsiveness. See M3.2 design notes.
+UI_POOL = 20
 
 # ---------------------------------------------------------------------------
-# Boot: load data + build indexes once at startup
+# Boot: load corpus + wire retrievers once. No indexing happens here.
 # ---------------------------------------------------------------------------
 
-print("=== CodeSearch M0 Boot ===")
-corpus, queries = load_codesearch()
+print("=== CodeSearch Boot ===")
+corpus, _ = load_codesearch()  # queries unused — the app takes live user input
 
-print("Building BM25 index...")
-bm25 = BM25Retriever(corpus)
+# Two id-keyed views over the corpus:
+#   corpus_by_id  — for rendering result cards (dense/hybrid hits carry id+score only)
+#   corpus_lookup — reranker candidate text (code_tokens, already space-joined)
+corpus_by_id = {d["id"]: d for d in corpus}
+corpus_lookup = {d["id"]: d["code_tokens"] for d in corpus}
 
-print("Initializing dense retriever...")
+if SMOKE_TEST_SIZE == -1:
+    print(f"Loading slim BM25 index from {BM25_SLIM_DIR} ...")
+    bm25 = BM25Retriever(BM25Index.load_index_only(BM25_SLIM_DIR, corpus))
+else:
+    print(f"Smoke mode (n={SMOKE_TEST_SIZE}): building in-memory BM25 index...")
+    bm25 = BM25Retriever(corpus)
+
 dense = DenseRetriever(recreate_collection=False)
-dense.index_corpus(corpus)
+if not dense.collection_exists_and_populated():
+    raise RuntimeError(
+        "Qdrant collection is empty. Build it offline with scripts/index_corpus.py — "
+        "the app will not embed the full corpus at boot."
+    )
 
-print("Ready.")
+hybrid = HybridRetriever(bm25, dense, pool_size=UI_POOL)
+reranker = CrossEncoderReranker(hybrid, corpus_lookup, pool_size=UI_POOL)
+
+RETRIEVERS = {
+    "BM25": bm25,
+    "Dense (MiniLM)": dense,
+    "Hybrid (RRF)": hybrid,
+    "Hybrid + Rerank": reranker,
+}
+MODES = list(RETRIEVERS.keys())
+
+print(f"Ready. corpus={len(corpus):,} docs · modes={MODES}")
 
 # ---------------------------------------------------------------------------
-# Search function
+# Search + formatting
 # ---------------------------------------------------------------------------
 
-def search(query: str) -> tuple[str, str]:
-    """Run BM25 and dense retrieval, return formatted results for both columns."""
-    if not query.strip():
-        return "Enter a query above.", "Enter a query above."
 
-    bm25_results = bm25.retrieve(query, top_k=TOP_K)
-    dense_results = dense.retrieve(query, top_k=TOP_K)
-
-    return _format_results(bm25_results), _format_results(dense_results)
+def _fmt_latency(dt: float) -> str:
+    return f"⏱ **{dt:.2f} s**" if dt >= 1.0 else f"⏱ **{dt * 1000:.0f} ms**"
 
 
-def _format_results(results: list[dict]) -> str:
-    if not results:
-        return "No results."
+def _format(hits: list[dict], mode: str) -> str:
+    if not hits:
+        return "_No results._"
 
-    lines = []
-    for i, r in enumerate(results, 1):
-        score = r.get("score", 0.0)
-        docstring = (r["docstring"] or "").strip()[:200]
-        code_preview = (r["code"] or "").strip()[:300]
-        url = r.get("url", "")
+    cards = []
+    for i, h in enumerate(hits, 1):
+        doc = corpus_by_id.get(h["id"])
+        if doc is None:
+            cards.append(
+                f"**#{i}** — `{h['id']}` not in local corpus "
+                f"(expected in smoke mode; full corpus on the Space)."
+            )
+            continue
 
-        lines.append(
-            f"**#{i} — score: {score:.4f}**\n"
-            f"**Docstring:** {docstring}{'…' if len(r.get('docstring','')) > 200 else ''}\n\n"
-            f"```python\n{code_preview}{'…' if len(r.get('code','')) > 300 else ''}\n```\n"
+        docstring = (doc.get("docstring") or "").strip()[:200]
+        code = (doc.get("code") or "").strip()[:400]
+        url = doc.get("url", "")
+        score = h.get("score", 0.0)
+
+        # Provenance line: shows WHY a doc ranked where it did, per mode.
+        prov = f"score **{score:.4f}**"
+        if h.get("bm25_rank") is not None or h.get("dense_rank") is not None:
+            prov += f" · bm25 #{h.get('bm25_rank')} · dense #{h.get('dense_rank')}"
+        if "pre_rerank_score" in h:
+            prov += f" · pre-rerank {h['pre_rerank_score']:.4f}"
+
+        cards.append(
+            f"**#{i}** — {prov}\n\n"
+            f"{docstring}{'…' if docstring else ''}\n\n"
+            f"```python\n{code}{'…' if code else ''}\n```\n"
             + (f"[source]({url})\n" if url else "")
             + "\n---"
         )
+    return "\n".join(cards)
 
-    return "\n".join(lines)
+
+def _run(mode: str, query: str) -> tuple[str, str]:
+    retr = RETRIEVERS[mode]
+    t0 = time.perf_counter()
+    try:
+        hits = retr.retrieve(query, top_k=TOP_K)
+    except Exception as e:  # one mode failing must not take down the search
+        traceback.print_exc()
+        return f"⚠️ **{mode} failed:** `{type(e).__name__}: {e}`", "—"
+    dt = time.perf_counter() - t0
+    return _format(hits, mode), _fmt_latency(dt)
+
+
+def search(query: str, left_mode: str, right_mode: str):
+    """Run both columns and return (left_md, left_latency, right_md, right_latency)."""
+    if not query.strip():
+        msg = "_Enter a query above._"
+        return msg, "", msg, ""
+    left_md, left_lat = _run(left_mode, query)
+    right_md, right_lat = _run(right_mode, query)
+    return left_md, left_lat, right_md, right_lat
 
 
 # ---------------------------------------------------------------------------
-# Gradio UI
+# UI — selectable two-column compare
 # ---------------------------------------------------------------------------
 
-with gr.Blocks(title="CodeSearch M0") as demo:
+with gr.Blocks(title="CodeSearch") as demo:
     gr.Markdown(
-        """
-# 🔍 CodeSearch — M0 Hello World
-**Dataset:** CodeSearchNet Python ({n} docs)  
-**Retrieval modes:** BM25 (left) vs Dense / HNSW (right)  
-Notice where they agree and where they diverge — that gap is what this project is about.
-""".format(n=len(corpus))
+        f"""
+# 🔍 CodeSearch
+Natural-language code search over **CodeSearchNet Python** ({len(corpus):,} functions).
+Pick a retriever per column and compare — watch where lexical (BM25), semantic
+(dense), fusion (RRF), and reranking disagree.
+"""
     )
 
     with gr.Row():
@@ -100,17 +172,21 @@ Notice where they agree and where they diverge — that gap is what this project
         search_btn = gr.Button("Search", variant="primary", scale=1)
 
     with gr.Row():
-        bm25_out = gr.Markdown(label="BM25 results")
-        dense_out = gr.Markdown(label="Dense (MiniLM) results")
+        with gr.Column():
+            left_mode = gr.Dropdown(MODES, value="BM25", label="Left retriever")
+            left_lat = gr.Markdown()
+            left_out = gr.Markdown()
+        with gr.Column():
+            right_mode = gr.Dropdown(
+                MODES, value="Hybrid + Rerank", label="Right retriever"
+            )
+            right_lat = gr.Markdown()
+            right_out = gr.Markdown()
 
-    with gr.Row():
-        gr.Markdown(
-            "_Tip: try a query like 'convert string to datetime' — "
-            "BM25 needs those exact words, dense finds semantically similar code._"
-        )
-
-    search_btn.click(fn=search, inputs=query_box, outputs=[bm25_out, dense_out])
-    query_box.submit(fn=search, inputs=query_box, outputs=[bm25_out, dense_out])
+    inputs = [query_box, left_mode, right_mode]
+    outputs = [left_out, left_lat, right_out, right_lat]
+    search_btn.click(fn=search, inputs=inputs, outputs=outputs)
+    query_box.submit(fn=search, inputs=inputs, outputs=outputs)
 
 
 if __name__ == "__main__":
