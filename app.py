@@ -174,6 +174,15 @@ def search(query: str, left_mode: str, right_mode: str):
     return left_md, left_lat, right_md, right_lat
 
 
+def update_column(query: str, mode: str) -> tuple[str, str]:
+    """Re-run a single column — wired to each retriever dropdown's change so
+    switching the retriever refreshes that column without re-running the other."""
+    if not query.strip():
+        return "_Enter a query above._", ""
+    gold_id = gold_by_query.get(query) or gold_by_query.get(query.strip())
+    return _run(mode, query, gold_id)
+
+
 # ---------------------------------------------------------------------------
 # UI — selectable two-column compare
 # ---------------------------------------------------------------------------
@@ -219,6 +228,13 @@ the **✅ GOLD** badge marks the correct function, and each column reports the r
     # Random: fill the box with a known-gold eval query, then run the comparison.
     random_btn.click(fn=pick_random, outputs=query_box).then(
         fn=search, inputs=inputs, outputs=outputs
+    )
+    # Changing a retriever re-runs only its own column (keeps the other as-is).
+    left_mode.change(
+        fn=update_column, inputs=[query_box, left_mode], outputs=[left_out, left_lat]
+    )
+    right_mode.change(
+        fn=update_column, inputs=[query_box, right_mode], outputs=[right_out, right_lat]
     )
 
 
