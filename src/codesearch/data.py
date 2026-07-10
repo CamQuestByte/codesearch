@@ -63,7 +63,7 @@ def load_codesearch(
         (corpus, queries) — see module docstring for schema.
         When queries_only=True, corpus is [].
     """
-    raw_test = load_dataset("code_search_net", "python", split="test")
+    raw_test = load_dataset("code-search-net/code_search_net", "python", split="test")
 
     if queries_only:
         if n != -1:
@@ -96,7 +96,7 @@ def load_codesearch(
             corpus.append(_make_doc(row))
     else:
         print("Loading CodeSearchNet Python split (full corpus)...")
-        raw_train = load_dataset("code_search_net", "python", split="train")
+        raw_train = load_dataset("code-search-net/code_search_net", "python", split="train")
         for split_name, raw in [("train", raw_train), ("test", raw_test)]:
             for row in tqdm(raw, desc=f"Adding {split_name} split to corpus"):
                 url = row["func_code_url"]
