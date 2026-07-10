@@ -17,6 +17,7 @@ Modes:
 """
 
 import os
+import random
 import sys
 import time
 import traceback
@@ -47,13 +48,19 @@ UI_POOL = 20
 # ---------------------------------------------------------------------------
 
 print("=== CodeSearch Boot ===")
-corpus, _ = load_codesearch()  # queries unused — the app takes live user input
+corpus, queries = load_codesearch()  # queries = eval set (test docstrings w/ known gold)
 
 # Two id-keyed views over the corpus:
 #   corpus_by_id  — for rendering result cards (dense/hybrid hits carry id+score only)
 #   corpus_lookup — reranker candidate text (code_tokens, already space-joined)
 corpus_by_id = {d["id"]: d for d in corpus}
 corpus_lookup = {d["id"]: d["code_tokens"] for d in corpus}
+
+# Ground truth for the eval queries: each test docstring maps to the id of the
+# function it documents. Lets the UI badge the "correct" hit and its rank — but
+# only for these known queries; a free-form query has no gold.
+gold_by_query = {q["query"]: q["relevant_id"] for q in queries}
+eval_query_texts = list(gold_by_query.keys())
 
 if SMOKE_TEST_SIZE == -1:
     print(f"Loading slim BM25 index from {BM25_SLIM_DIR} ...")
@@ -91,7 +98,7 @@ def _fmt_latency(dt: float) -> str:
     return f"⏱ **{dt:.2f} s**" if dt >= 1.0 else f"⏱ **{dt * 1000:.0f} ms**"
 
 
-def _format(hits: list[dict], mode: str) -> str:
+def _format(hits: list[dict], mode: str, gold_id: str | None = None) -> str:
     if not hits:
         return "_No results._"
 
@@ -117,8 +124,9 @@ def _format(hits: list[dict], mode: str) -> str:
         if "pre_rerank_score" in h:
             prov += f" · pre-rerank {h['pre_rerank_score']:.4f}"
 
+        gold = " ✅ **GOLD**" if gold_id is not None and h["id"] == gold_id else ""
         cards.append(
-            f"**#{i}** — {prov}\n\n"
+            f"**#{i}**{gold} — {prov}\n\n"
             f"{docstring}{'…' if docstring else ''}\n\n"
             f"```python\n{code}{'…' if code else ''}\n```\n"
             + (f"[source]({url})\n" if url else "")
@@ -127,7 +135,7 @@ def _format(hits: list[dict], mode: str) -> str:
     return "\n".join(cards)
 
 
-def _run(mode: str, query: str) -> tuple[str, str]:
+def _run(mode: str, query: str, gold_id: str | None) -> tuple[str, str]:
     retr = RETRIEVERS[mode]
     t0 = time.perf_counter()
     try:
@@ -136,7 +144,22 @@ def _run(mode: str, query: str) -> tuple[str, str]:
         traceback.print_exc()
         return f"⚠️ **{mode} failed:** `{type(e).__name__}: {e}`", "—"
     dt = time.perf_counter() - t0
-    return _format(hits, mode), _fmt_latency(dt)
+
+    # Gold verdict header — only for known eval queries (free-form has no gold).
+    verdict = ""
+    if gold_id is not None:
+        rank = next((i for i, h in enumerate(hits, 1) if h["id"] == gold_id), None)
+        verdict = (
+            f"### ✅ Gold answer at rank #{rank}\n\n"
+            if rank is not None
+            else f"### ✗ Gold answer not in top-{TOP_K}\n\n"
+        )
+    return verdict + _format(hits, mode, gold_id), _fmt_latency(dt)
+
+
+def pick_random() -> str:
+    """Fill the query box with a random eval query (one whose gold we know)."""
+    return random.choice(eval_query_texts) if eval_query_texts else ""
 
 
 def search(query: str, left_mode: str, right_mode: str):
@@ -144,8 +167,10 @@ def search(query: str, left_mode: str, right_mode: str):
     if not query.strip():
         msg = "_Enter a query above._"
         return msg, "", msg, ""
-    left_md, left_lat = _run(left_mode, query)
-    right_md, right_lat = _run(right_mode, query)
+    # Known only for eval queries (exact match); free-form typing → gold_id None.
+    gold_id = gold_by_query.get(query) or gold_by_query.get(query.strip())
+    left_md, left_lat = _run(left_mode, query, gold_id)
+    right_md, right_lat = _run(right_mode, query, gold_id)
     return left_md, left_lat, right_md, right_lat
 
 
@@ -160,6 +185,9 @@ with gr.Blocks(title="CodeSearch") as demo:
 Natural-language code search over **CodeSearchNet Python** ({len(corpus):,} functions).
 Pick a retriever per column and compare — watch where lexical (BM25), semantic
 (dense), fusion (RRF), and reranking disagree.
+
+Hit **🎲 Random eval query** to load a real benchmark query with a known answer —
+the **✅ GOLD** badge marks the correct function, and each column reports the rank it landed at.
 """
     )
 
@@ -170,6 +198,7 @@ Pick a retriever per column and compare — watch where lexical (BM25), semantic
             scale=4,
         )
         search_btn = gr.Button("Search", variant="primary", scale=1)
+        random_btn = gr.Button("🎲 Random eval query", scale=1)
 
     with gr.Row():
         with gr.Column():
@@ -187,6 +216,10 @@ Pick a retriever per column and compare — watch where lexical (BM25), semantic
     outputs = [left_out, left_lat, right_out, right_lat]
     search_btn.click(fn=search, inputs=inputs, outputs=outputs)
     query_box.submit(fn=search, inputs=inputs, outputs=outputs)
+    # Random: fill the box with a known-gold eval query, then run the comparison.
+    random_btn.click(fn=pick_random, outputs=query_box).then(
+        fn=search, inputs=inputs, outputs=outputs
+    )
 
 
 if __name__ == "__main__":
