@@ -15,6 +15,8 @@ short_description: BM25 vs dense retrieval on CodeSearchNet
 
 Learning project: BM25 vs dense vs hybrid retrieval on CodeSearchNet, with rigorous eval.
 
+**🔍 Live demo:** https://camquest-codesearch.hf.space — pick a retriever per column and compare BM25 / dense / hybrid / reranked results side-by-side, with per-query latency.
+
 ## Retrieval Results
 
 ### Reference numbers (Husain et al., 2019)
@@ -59,7 +61,7 @@ Deltas are vs BM25 baseline. **Recall@100 jumps 23.1pp** going from sparse to de
 | M1 · BM25 Baseline + Eval | ✅ done |
 | M2 · Dense Retrieval | ✅ done |
 | M3 · Hybrid + Reranking | ✅ done |
-| M4 · UI + Deployment | ⬜ not started |
+| M4 · UI + Deployment | ✅ done — [live](https://camquest-codesearch.hf.space) |
 | M5 · Model Swap (optional) | ⬜ not started |
 
 ## Local Setup
