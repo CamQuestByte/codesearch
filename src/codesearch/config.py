@@ -22,7 +22,27 @@ QDRANT_COLLECTION: str = os.getenv("QDRANT_COLLECTION", "codesearch-minilm")
 
 # --- Embedding ---
 EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
-EMBEDDING_DIM: int = 384  # MiniLM-L6-v2 output dim. Update if you swap models in M5.
+# 384 for MiniLM-L6-v2; override via env for a different model (e.g. 768 for
+# jina-embeddings-v2-base-code). Must match the Qdrant collection's vector size.
+EMBEDDING_DIM: int = int(os.getenv("EMBEDDING_DIM", "384"))
+
+# What text we embed per doc for dense retrieval (M5 experiment):
+#   "code_tokens"   — CSN space-joined tokens (default; the M0-M4 setup)
+#   "code_stripped" — docstring-stripped function source (data.strip_docstring)
+# Set alongside a matching QDRANT_COLLECTION when indexing a variant.
+EMBED_INPUT: str = os.getenv("EMBED_INPUT", "code_tokens")
+
+# Max wordpiece length for encoders we drive manually (UniXcoderEncoder). Default
+# 256 to match all-MiniLM-L6-v2's max_seq_length (the M0-M4 baseline), so an M5
+# model swap is an apples-to-apples comparison at the same truncation — not a model
+# that silently gets 2x the context. Also caps O(L^2) attention cost. SentenceTransformer
+# models ignore this (their own max_seq_length governs). See [[todo-embed-raw-code]].
+EMBED_MAX_LENGTH: int = int(os.getenv("EMBED_MAX_LENGTH", "256"))
+
+# Store vectors on disk (Qdrant on_disk=True) instead of RAM. Needed when a new
+# collection would push total Qdrant RAM past the 1GB free tier — e.g. a second
+# 384-dim collection, or any 768-dim model over 434k docs.
+QDRANT_ON_DISK: bool = os.getenv("QDRANT_ON_DISK", "false").lower() in ("1", "true", "yes")
 
 # --- Dataset ---
 # SMOKE_TEST_SIZE: how many docs to load for M0 hello-world.

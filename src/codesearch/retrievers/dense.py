@@ -28,7 +28,6 @@ import pickle
 from pathlib import Path
 
 import numpy as np
-from sentence_transformers import SentenceTransformer
 from qdrant_client import QdrantClient
 from qdrant_client.models import (
     Distance,
@@ -47,6 +46,7 @@ from codesearch.config import (
     EMBEDDING_MODEL,
     EMBEDDING_DIM,
 )
+from codesearch.embedding import load_encoder
 
 # Batch size for embedding. MiniLM is small; 256 is fast on CPU.
 # Reduce to 64 if you hit memory issues on HF Spaces.
@@ -71,7 +71,7 @@ class DenseRetriever:
                                  Use this when re-indexing with a new model.
         """
         print(f"Loading embedding model: {EMBEDDING_MODEL}")
-        self.model = SentenceTransformer(EMBEDDING_MODEL)
+        self.model = load_encoder(EMBEDDING_MODEL)
 
         print(f"Connecting to Qdrant at {QDRANT_URL}")
         self.client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)

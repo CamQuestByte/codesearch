@@ -484,13 +484,36 @@ k=60 is standard; don't tune it.
 
 ---
 
-### M5 · Embedding Model Swap (Optional)
-**Scope:** Swap `all-MiniLM-L6-v2` for a code-specific model. Measure delta.
-**Candidate models:**
-- `flax-sentence-embeddings/st-codesearch-distilroberta-base`
-- `microsoft/codebert-base` (requires custom pooling — more work)
+### M5 · Embedding Experiments (in progress)
+**Scope:** Is the dense bottleneck the *representation* or the *model*? Two sub-experiments.
 
-**Done when:** README ablation table has a fifth row. Can answer:
+**Sub-experiment A — doc representation (DONE, null).** Embed docstring-stripped function
+source (`data.strip_docstring`) vs CSN `code_tokens`, MiniLM fixed. Same-sample A/B
+(n=2,000, seed=42): Dense MRR 0.3938→0.3938 (±0.00), Hybrid 0.3875→0.3853 — all inside
+SE≈0.01. **A general NL embedder can't exploit code structure, so representation barely
+moves MRR — the model is the bottleneck.** (Full-22k stripped eval failed: on-disk Qdrant
+queries time out at 22k batch scale; n=2,000 A/B is the evidence. To finish the full row,
+bump the DenseRetriever Qdrant client timeout, or cite n=2,000.)
+
+**Sub-experiment B — swap to a fair code bi-encoder (indexing + eval underway).**
+Model: **`microsoft/unixcoder-base`** — code-pretrained, *not* CSN-retrieval-finetuned
+(a fair test; CSN-tuned encoders like `st-codesearch-distilroberta-base` are rigged
+in-distribution and kept only as a labelled ceiling). Jina's `jina-embeddings-v2-base-code`
+is dead on our stack (`find_pruneable_heads_and_indices` removed in transformers 5.x).
+- **Faithful encoder:** the official `unixcoder.py` can't run under transformers 5.x (its
+  2-D attention mask crashes batched / goes causal single). `codesearch/embedding.py`
+  reproduces the official encoder-only recipe (mode token → mean-pool → L2-norm) in a
+  5.x-executable form, validated **element-wise identical** (`max|Δ|=0`) to the official
+  model run bidirectionally (`is_decoder` proven mask-only, zero weight effect). Test:
+  `scripts/test_unixcoder_encoder.py`.
+- **Fair setup:** `EMBED_MAX_LENGTH=256` to match MiniLM's `max_seq_length` (apples-to-apples).
+  768-dim × 434k > 1GB free tier → `QDRANT_ON_DISK=1`. ~37h CPU index (already core-bound;
+  no fair speedup — parallelism ~1.4× max, quantization would confound).
+- **Early read:** `GOLDS_FIRST=1` embeds the ~22k eval-gold docs first, so
+  `scripts/sample_eval_partial.py` runs a fair brute-force cosine A/B (both models, same pool,
+  exact) straight from the `.npy` caches at partial milestones before the full index finishes.
+
+**Done when:** README ablation table UniXcoder row filled. Can answer:
 "Does model choice or architecture choice (hybrid+rerank) give a bigger MRR lift?"
 
 ---
@@ -501,8 +524,10 @@ k=60 is standard; don't tune it.
    Use an offline `scripts/index_corpus.py` run once locally or as a one-time HF Space task.
    `dense.py` already checks `collection_exists_and_populated()` and skips if true.
 
-2. **Qdrant free tier: 1GB RAM.** Stick to 384-dim models. If you hit memory errors,
-   reduce to a smaller corpus slice or upgrade tier.
+2. **Qdrant free tier: 1GB RAM.** 384-dim in-RAM (MiniLM) fits. Larger models (e.g.
+   768-dim UniXcoder ≈ 1.3GB) exceed it — set `QDRANT_ON_DISK=1` (config `QDRANT_ON_DISK`,
+   passed to `VectorParams(on_disk=True)`): vectors live on disk, HNSW graph stays in RAM.
+   Fine for a batch eval. Alternatively reduce corpus slice or upgrade tier.
 
 3. **BM25 scores and cosine similarities cannot be directly compared or linearly combined.**
    They are on completely different scales. Always use RRF for fusion.

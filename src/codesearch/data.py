@@ -27,6 +27,9 @@ Full-corpus mode (n == -1):
 
 from __future__ import annotations
 
+import ast
+import textwrap
+
 from datasets import load_dataset
 from tqdm import tqdm
 
@@ -42,6 +45,49 @@ def _make_doc(row: dict) -> dict:
         "docstring": row["func_documentation_string"],
         "url": url,
     }
+
+
+def strip_docstring(src: str) -> str | None:
+    """Return the function source with its docstring removed, or None if the
+    source can't be parsed (Python-2 / malformed rows — caller should fall back).
+
+    AST span-excision: locate the leading string-literal statement of the function
+    body and cut exactly its character span out of the (dedented) source. This
+    preserves comments, formatting, and string literals — unlike `code_tokens`,
+    which drops comments and mangles spacing.
+
+    This is the dense-embedding input for the M5 "embed source vs code_tokens"
+    experiment. The docstring MUST be removed: the eval query *is* the docstring,
+    so embedding it raw would be a trivial self-match (leakage → fake MRR ~0.9).
+    Not wired into _make_doc — it's called only by the offline indexer, so we
+    don't pay AST parsing on every corpus load.
+    """
+    try:
+        ded = textwrap.dedent(src)
+        tree = ast.parse(ded)
+    except SyntaxError:
+        return None
+    node = tree.body[0] if tree.body else None
+    if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        return ded
+    b0 = node.body[0] if node.body else None
+    if (
+        isinstance(b0, ast.Expr)
+        and isinstance(b0.value, ast.Constant)
+        and isinstance(b0.value.value, str)
+    ):
+        lines = ded.splitlines(keepends=True)
+        sl, sc = b0.lineno - 1, b0.col_offset
+        el, ec = b0.end_lineno - 1, b0.end_col_offset
+        if sl == el:
+            lines[sl] = lines[sl][:sc] + lines[sl][ec:]
+        else:
+            lines[sl] = lines[sl][:sc]
+            for k in range(sl + 1, el):
+                lines[k] = ""
+            lines[el] = lines[el][ec:]
+        return "".join(lines)
+    return ded
 
 
 def load_codesearch(

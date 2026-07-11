@@ -45,7 +45,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 
 import numpy as np
 from tqdm import tqdm
-from sentence_transformers import SentenceTransformer
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams, PointStruct
 
@@ -55,8 +54,11 @@ from codesearch.config import (
     QDRANT_COLLECTION,
     EMBEDDING_MODEL,
     EMBEDDING_DIM,
+    EMBED_INPUT,
+    QDRANT_ON_DISK,
 )
-from codesearch.data import load_codesearch
+from codesearch.data import load_codesearch, strip_docstring
+from codesearch.embedding import load_encoder
 
 _BATCH_SIZE = 256
 _QUEUE_MAX = 20          # backpressure: blocks producer if upsert lags this far behind
@@ -67,10 +69,21 @@ _UPSERT_RETRIES = 5
 
 def _cache_paths(model: str) -> tuple[str, str]:
     safe = model.replace("/", "_")
+    # Non-default embedding inputs get a distinct cache so they never clobber the
+    # code_tokens vectors (same model, different doc text).
+    variant = "" if EMBED_INPUT == "code_tokens" else f"_{EMBED_INPUT}"
     return (
-        os.path.join(_CACHE_DIR, f"corpus_vectors_{safe}.npy"),
-        os.path.join(_CACHE_DIR, f"corpus_vectors_{safe}.progress"),
+        os.path.join(_CACHE_DIR, f"corpus_vectors_{safe}{variant}.npy"),
+        os.path.join(_CACHE_DIR, f"corpus_vectors_{safe}{variant}.progress"),
     )
+
+
+def _embed_text(doc: dict) -> str:
+    """Doc text to embed, per EMBED_INPUT. Falls back to code_tokens when the
+    source can't be parsed for stripping (keeps every doc embeddable)."""
+    if EMBED_INPUT == "code_stripped":
+        return strip_docstring(doc["code"]) or doc["code_tokens"]
+    return doc["code_tokens"]
 
 
 def _read_progress(path: str) -> int:
@@ -142,7 +155,7 @@ def _upsert_worker(
 
 def _produce(
     corpus: list[dict],
-    model: SentenceTransformer | None,
+    model,  # SentenceTransformer | UniXcoderEncoder | None (see codesearch.embedding)
     vectors_mmap: np.memmap,
     progress_path: str,
     embed_progress: int,
@@ -170,7 +183,7 @@ def _produce(
         for i in range(embed_progress, n, _BATCH_SIZE):
             end = min(i + _BATCH_SIZE, n)
             batch = corpus[i:end]
-            texts = [doc["code_tokens"] for doc in batch]
+            texts = [_embed_text(doc) for doc in batch]
             vecs = model.encode(
                 texts, show_progress_bar=False, normalize_embeddings=True
             ).astype(np.float32)
@@ -194,9 +207,22 @@ def build_index(recreate: bool) -> None:
     # -------------------------------------------------------------------------
     # 1. Corpus
     # -------------------------------------------------------------------------
-    corpus, _ = load_codesearch(n=-1)
+    corpus, queries = load_codesearch(n=-1)
     n = len(corpus)
     print(f"Corpus: {n:,} docs")
+
+    # GOLDS_FIRST (M5 sample-eval support): embed the eval-gold docs before the
+    # rest so a partial index already contains every query's target. Run-local
+    # only — does NOT change data.load_codesearch's global order, so the BM25
+    # slim-index id fingerprint and the live Space are untouched. Order is
+    # irrelevant to retrieval correctness (search is by vector; payload=doc_id).
+    # scripts/sample_eval_partial.py reproduces this exact order from the cache.
+    if os.getenv("GOLDS_FIRST", "false").lower() in ("1", "true", "yes"):
+        gold_ids = {q["relevant_id"] for q in queries}
+        golds = [d for d in corpus if d["id"] in gold_ids]
+        rest = [d for d in corpus if d["id"] not in gold_ids]
+        corpus = golds + rest
+        print(f"[golds-first] {len(golds):,} gold docs first, then {len(rest):,} others")
 
     # -------------------------------------------------------------------------
     # 2. Vector cache
@@ -220,10 +246,20 @@ def build_index(recreate: bool) -> None:
         existing = [c for c in existing if c != QDRANT_COLLECTION]
 
     if QDRANT_COLLECTION not in existing:
-        print(f"Creating collection '{QDRANT_COLLECTION}' (dim={EMBEDDING_DIM}, cosine).")
+        # on-disk vectors (QDRANT_ON_DISK) when a collection would push total
+        # Qdrant RAM past the 1GB free tier — the default code_tokens collection
+        # already fills ~667MB, and 768-dim models are ~1.3GB alone. Keeps vectors
+        # on disk (HNSW graph stays in RAM) — fine for a batch eval.
+        on_disk = QDRANT_ON_DISK
+        print(
+            f"Creating collection '{QDRANT_COLLECTION}' "
+            f"(dim={EMBEDDING_DIM}, cosine, on_disk={on_disk})."
+        )
         client.create_collection(
             collection_name=QDRANT_COLLECTION,
-            vectors_config=VectorParams(size=EMBEDDING_DIM, distance=Distance.COSINE),
+            vectors_config=VectorParams(
+                size=EMBEDDING_DIM, distance=Distance.COSINE, on_disk=on_disk
+            ),
         )
         upsert_start = 0
     else:
@@ -240,7 +276,7 @@ def build_index(recreate: bool) -> None:
     # -------------------------------------------------------------------------
     if embed_progress < n:
         print(f"Loading model: {EMBEDDING_MODEL}")
-        model = SentenceTransformer(EMBEDDING_MODEL)
+        model = load_encoder(EMBEDDING_MODEL)
     else:
         model = None
         print("Embedding step skipped — cache is complete.")
