@@ -37,7 +37,7 @@ Eval setup: full 434k-doc corpus, 22k queries, BM25 indexes `func_code_tokens` (
 | Dense | MiniLM-L6-v2 | 0.3891 (+0.1144) | 0.4309 (+0.1289) | 0.7520 (+0.2312) | M2 ✅ |
 | Hybrid (RRF) | MiniLM + BM25 | 0.3977 (+0.1230) | 0.4475 (+0.1455) | 0.7750 (+0.2542) | M3.1 ✅ |
 | Hybrid + Rerank | + `ms-marco-MiniLM-L-6-v2` | 0.4011 (+0.1264) | 0.4486 (+0.1466) | 0.7750 (+0.2542) | M3.2 ✅ |
-| Dense | UniXcoder-base _(fair code model)_ | — | — | — | M5 🔄 |
+| Dense | UniXcoder-base _(fair code model)_ | 0.4343 (+0.1596) | 0.4748 (+0.1728) | 0.7769 (+0.2561) | M5 ✅ |
 
 Deltas are vs BM25 baseline. **Recall@100 jumps 23.1pp** going from sparse to dense — the model bridges the natural-language-query → code vocabulary gap that BM25 cannot. This is the motivating data point for M3: there is 23pp of headroom available to a reranker on top of dense, but only ~8pp on top of BM25 alone.
 
@@ -49,7 +49,9 @@ Deltas are vs BM25 baseline. **Recall@100 jumps 23.1pp** going from sparse to de
 
 **Sub-experiment A — does the doc *representation* matter? No (null result).** Re-embedded the corpus with the docstring-stripped **function source** (`data.strip_docstring` — AST span-excision, validated 0 docstring leakage) instead of CSN `code_tokens`, holding the model (MiniLM-L6-v2) fixed. Same-sample A/B (n=2,000, seed=42): Dense MRR@10 0.3938 → 0.3938 (±0.00), Hybrid 0.3875 → 0.3853 — every delta inside SE≈0.01. Interpretation: a general-purpose NL embedder can't exploit code structure, so *how* the code is serialised barely moves retrieval. The **model** is the bottleneck, not the representation — which is what motivates B.
 
-**Sub-experiment B — swap in a *fair* code bi-encoder (indexing + eval underway).** Replacing MiniLM with **UniXcoder-base**: code-pretrained but *not* CodeSearchNet-retrieval-finetuned, so it's an honest test (CSN-tuned encoders would be rigged in-distribution). The official `unixcoder.py` can't run on our pinned `transformers 5.x` — its 2-D `(mask_i·mask_j)` attention mask crashes on batched input and goes silently causal on single input — so `codesearch/embedding.py` reproduces the official encoder-only recipe (mode-token framing → mean-pool → L2-normalize) in a form 5.x executes, validated **element-wise identical** (`max|Δ|=0`) to the official model run bidirectionally. Held to the same `max_seq_length=256` as the MiniLM baseline so this is an apples-to-apples *model* swap.
+**Sub-experiment B — swap in a *fair* code bi-encoder: +4.5pp MRR, the biggest lever in the project.** Replacing MiniLM with **UniXcoder-base** (code-pretrained but *not* CodeSearchNet-retrieval-finetuned — an honest test; CSN-tuned encoders would be rigged in-distribution) lifts dense **MRR@10 0.3891 → 0.4343 (+4.5pp)**, nDCG@10 0.4309 → 0.4748, Recall@100 0.7520 → 0.7769 — full 434k corpus, 22k queries, same `code_tokens` input, same Qdrant HNSW method. For scale that's ~5× the hybrid-RRF gain (+0.9pp) and ~14× the cross-encoder rerank gain (+0.3pp). **This confirms the A→B thesis: the *model* was the dense bottleneck, not the representation.**
+
+Implementation notes: the official `unixcoder.py` can't run on our pinned `transformers 5.x` — its 2-D `(mask_i·mask_j)` attention mask crashes on batched input and goes silently causal on single input — so `codesearch/embedding.py` reproduces the official encoder-only recipe (mode-token framing → mean-pool → L2-normalize) in a form 5.x executes, validated **element-wise identical** (`max|Δ|=0`) to the official model run bidirectionally. Held to the same `max_seq_length=256` as the MiniLM baseline (apples-to-apples *model* swap). 768-dim × 434k > 1GB free tier → the Qdrant collection is `on_disk` (≈0.97s/query vs MiniLM's in-RAM ms; a raised client timeout + query-retry guard handle the slow reads). Next: a **code-to-code** variant (UniXcoder on AST-docstring-stripped `whole_func_string`, its native input) and a UniXcoder **hybrid** row.
 
 ## Stack
 

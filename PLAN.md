@@ -495,7 +495,10 @@ moves MRR — the model is the bottleneck.** (Full-22k stripped eval failed: on-
 queries time out at 22k batch scale; n=2,000 A/B is the evidence. To finish the full row,
 bump the DenseRetriever Qdrant client timeout, or cite n=2,000.)
 
-**Sub-experiment B — swap to a fair code bi-encoder (indexing + eval underway).**
+**Sub-experiment B — swap to a fair code bi-encoder: DONE, +4.5pp MRR (the biggest lever).**
+Full 434k / 22k-query Qdrant eval: dense **MRR@10 0.3891 → 0.4343**, nDCG 0.4309 → 0.4748,
+Recall@100 0.7520 → 0.7769 — same `code_tokens` input, same HNSW method. ~5× the hybrid gain,
+~14× the rerank gain. Confirms the model (not the representation) is the dense bottleneck.
 Model: **`microsoft/unixcoder-base`** — code-pretrained, *not* CSN-retrieval-finetuned
 (a fair test; CSN-tuned encoders like `st-codesearch-distilroberta-base` are rigged
 in-distribution and kept only as a labelled ceiling). Jina's `jina-embeddings-v2-base-code`

@@ -25,6 +25,8 @@ HNSW `ef_search` parameter (set at query time):
 from __future__ import annotations
 
 import pickle
+import random
+import time
 from pathlib import Path
 
 import numpy as np
@@ -74,7 +76,11 @@ class DenseRetriever:
         self.model = load_encoder(EMBEDDING_MODEL)
 
         print(f"Connecting to Qdrant at {QDRANT_URL}")
-        self.client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
+        # timeout raised well above the 5s default: on-disk collections (768-dim
+        # models that exceed the 1GB free-tier RAM) read vectors from disk per
+        # query, so a search batch can take tens of seconds. In-RAM collections
+        # (MiniLM) never need this.
+        self.client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY, timeout=120)
         self.collection = QDRANT_COLLECTION
 
         self._query_cache: dict[str, np.ndarray] = {}
@@ -256,6 +262,30 @@ class DenseRetriever:
             out[pos] = vec.tolist()
         return out
 
+    def _query_batch_with_retry(self, requests: list, retries: int = 5):
+        """Qdrant batch search with exponential backoff.
+
+        Qdrant Cloud is reached over the network, and the local systemd-resolved
+        stub can momentarily fail a DNS lookup under heavy CPU load ("Temporary
+        failure in name resolution"). The upsert path already retries; without the
+        same guard here, one transient blip aborts a whole 22k-query eval.
+        """
+        for attempt in range(retries):
+            try:
+                return self.client.query_batch_points(
+                    collection_name=self.collection,
+                    requests=requests,
+                )
+            except Exception as e:
+                if attempt == retries - 1:
+                    raise
+                wait = min(2 ** attempt, 10) + random.random()
+                tqdm.write(
+                    f"[dense] Qdrant query retry {attempt + 1}/{retries} "
+                    f"in {wait:.1f}s after: {e}"
+                )
+                time.sleep(wait)
+
     def retrieve_batch(
         self, queries: list[str], top_k: int = 100, ef_search: int = 128
     ) -> list[list[dict]]:
@@ -292,10 +322,7 @@ class DenseRetriever:
                 )
                 for qvec in chunk
             ]
-            responses = self.client.query_batch_points(
-                collection_name=self.collection,
-                requests=requests,
-            )
+            responses = self._query_batch_with_retry(requests)
             for resp in responses:
                 all_results.append(
                     [
